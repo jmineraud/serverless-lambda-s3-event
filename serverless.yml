@@ -1,0 +1,155 @@
+# Welcome to Serverless!
+#
+# This file is the main config file for your service.
+# It's very minimal at this point and uses default values.
+# You can always add more config options for more control.
+# We've included some commented out config examples here.
+# Just uncomment any of them to get that config option.
+#
+# For full config options, check the docs:
+#    docs.serverless.com
+#
+# Happy Coding!
+
+service: serverless-lambda-s3-event
+# app and org for use with dashboard.serverless.com
+#app: your-app-name
+#org: your-org-name
+
+# You can pin your service to only deploy with a specific Serverless version
+# Check out our docs for more details
+frameworkVersion: '1'
+
+provider:
+  name: aws
+  runtime: python3.7
+
+  # you can overwrite defaults here
+  stage: dev
+  #region: us-east-1
+
+  # Grant read/write access to the bucket
+  iamRoleStatements:
+    - Effect: "Allow"
+      Action:
+        - "s3:ListBucket"
+      Resource:
+        Fn::Join:
+          - ""
+          - - "arn:aws:s3:::"
+            - Ref: MyBucket
+    - Effect: "Allow"
+      Action:
+        - "s3:PutObject"
+        - "s3:GetObject"
+      Resource:
+        Fn::Join:
+          - ""
+          - - "arn:aws:s3:::"
+            - Ref: MyBucket
+            - "/*"
+
+package:
+  exclude:
+    - "S3Event/*"
+
+functions:
+  # The function to process both events
+  process-s3-event:
+    handler: handler.process_event
+
+  # Our custom function to apply the s3 notification event triggers to the bucket to invoke the function
+  apply-s3-notifications:
+    handler: apply_s3_notifications.handler
+    timeout: 60
+    memorySize: 128
+    role:
+      Fn::GetAtt:
+        - applyS3NotificationsRole
+        - Arn
+    package:
+      artifact: S3Event/apply-s3-notification.zip    
+
+
+# you can add CloudFormation resource templates here
+resources:
+  Resources:
+
+    # The bucket, source of data events
+    MyBucket:
+      Type: AWS::S3::Bucket
+      Properties:
+        # Disable public access on this bucket
+        PublicAccessBlockConfiguration:
+          BlockPublicAcls: True
+          IgnorePublicAcls: True
+          BlockPublicPolicy: True
+          RestrictPublicBuckets: True
+
+    # Allow the MyBucket to invoke our function
+    MyBucketRawDataEventPermission:
+      Type: AWS::Lambda::Permission
+      Properties:
+        Action: lambda:invokeFunction
+        SourceAccount:
+          Ref: AWS::AccountId
+        FunctionName:
+          Fn::GetAtt:
+            - ProcessDashs3DasheventLambdaFunction
+            - Arn
+        SourceArn:
+          Fn::GetAtt:
+            - MyBucket
+            - Arn
+        Principal: s3.amazonaws.com
+
+    # Custom resource to apply the triggers from S3 event to call the functions
+    ApplyMyBucketNotificationCustomResource:
+      Type: Custom::ApplyS3Notification
+      Properties:
+        ServiceToken:
+          Fn::GetAtt:
+            - ApplyDashs3DashnotificationsLambdaFunction
+            - Arn
+        S3Bucket:
+          Ref: MyBucket
+        NotificationIds:
+          - S3ObjectCreatedEventFoo
+          - S3ObjectCreatedEventBar
+        FunctionsARN:
+          # Put the array of functions to be triggered, same number as notification ids
+          - Fn::GetAtt:
+              - ProcessDashs3DasheventLambdaFunction
+              - Arn
+          - Fn::GetAtt:
+              - ProcessDashs3DasheventLambdaFunction
+              - Arn
+        Suffixes:
+          - .json
+          - .png
+
+    # The role for the function applyS3Notification
+    applyS3NotificationsRole:
+      Type: AWS::IAM::Role
+      Properties:
+        AssumeRolePolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service: lambda.amazonaws.com
+              Action: sts:AssumeRole
+        ManagedPolicyArns:
+          - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        Path: /
+        Policies:
+          - PolicyName: S3BucketNotificationPolicy
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Sid: AllowBucketNotification
+                  Effect: Allow
+                  Action: s3:PutBucketNotification
+                  Resource:
+                    - "Fn::Join": ["", [ "arn:aws:s3:::", { "Ref": MyBucket }]]
+                    - "Fn::Join": ["", [ "arn:aws:s3:::", { "Ref": MyBucket }, "/*"]]
